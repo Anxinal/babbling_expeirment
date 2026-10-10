@@ -118,7 +118,7 @@ def main():
     p.add_argument("--val_samples_per_task", type=int, default=100,
                    help="per-epoch validation: held out from the end of each training file")
     p.add_argument("--eval_samples_per_task", type=int, default=100, help="per length, after a stage")
-    p.add_argument("--epochs", type=int, nargs=3, default=[5, 5, 15], help="epochs per stage")
+    p.add_argument("--epochs", type=int, nargs=3, default=[5, 5, 10], help="epochs per stage")
     p.add_argument("--start_stage", type=int, default=1, choices=[1, 2, 3])
     p.add_argument("--batch_size", type=int, default=16)
     p.add_argument("--eval_batch_size", type=int, default=2,
@@ -127,7 +127,7 @@ def main():
     p.add_argument("--warmup_steps", type=int, default=4000)
     p.add_argument("--grad_clip", type=float, default=1.0)
     p.add_argument("--workers", type=int, default=4)
-    p.add_argument("--log_every", type=int, default=200)
+    p.add_argument("--log_every", type=int, default=250)
     p.add_argument("--seed", type=int, default=43)
     p.add_argument("--output_dir", required=True)
     g = p.add_argument_group("wandb")

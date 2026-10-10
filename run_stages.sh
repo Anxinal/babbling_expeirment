@@ -41,7 +41,7 @@ PIP_ARGS="${PIP_ARGS:-}"
 #   TORCH_SPEC='torch --index-url https://download.pytorch.org/whl/cu121'
 TORCH_SPEC="${TORCH_SPEC:-}"
 EXP_ROOT="${EXP_ROOT:-${REPO_DIR}/experiments}"
-LOG_DIR="${EXP_ROOT}/slurm_logs"
+LOG_DIR="${EXP_ROOT}/logs"
 SEED="${SEED:-42}"
 EXTRA="${EXTRA:-}"
 
@@ -54,7 +54,7 @@ PARTITION="${PARTITION:-gpu}"
 GPU_SPEC="${GPU_SPEC:-h100-96:1}"
 CPUS="${CPUS:-8}"
 MEM="${MEM:-64G}"
-TIME="${TIME:-48:00:00}"
+TIME="${TIME:-16:00:00}"
 
 MODE="${1:-slurm}"
 
