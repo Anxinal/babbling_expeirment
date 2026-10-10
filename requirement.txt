@@ -1,0 +1,12 @@
+# Dependencies for train.py / run_stages.sh, which builds a virtualenv from this
+# file on first use.
+#
+# Install torch separately if you need a specific CUDA build:
+#   TORCH_SPEC='torch --index-url https://download.pytorch.org/whl/cu121' bash run_stages.sh
+
+torch>=2.1
+transformers>=5.17    # AutoTokenizer; >=5 for tmodel/roformer
+datasets>=2.19        # BABILong from the Hugging Face Hub
+wandb>=0.19
+torch_geometric>=2.8  # sinusoidal encoding for --pe sinusoidal
+numpy>=1.24           # imported by tmodel/roformer
