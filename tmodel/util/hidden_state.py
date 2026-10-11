@@ -7,12 +7,11 @@ as that LayerNorm's input:
 
     transformer_mask / alibi, encoder layer    input of ``norm2``
     transformer_mask / alibi, decoder layer    input of ``norm3`` (after self- and cross-attention)
-    roformer layer                     input of ``attention.output.LayerNorm``
+    roformer, encoder layer                    input of ``attention.output.LayerNorm``
+    roformer, decoder layer                    input of ``crossattention.output.LayerNorm``
 """
 
 import torch
-
-from ..models import DecoderOnlyLM
 
 
 def _layers_and_norm(model, stack):
@@ -24,9 +23,11 @@ def _layers_and_norm(model, stack):
         if stack == "encoder":
             return tr.encoder.layers, "norm2"
         return tr.decoder.layers, "norm3"
-    if stack != "decoder":
-        raise ValueError("this model is decoder-only; use stack='decoder'")
-    return model.model.roformer.encoder.layer, "attention.output.LayerNorm"   # roformer
+    # roformer. Its layers are post-norm: each LayerNorm takes the attention output
+    # already added to the residual, so its input is the same point in the stream.
+    if stack == "encoder":
+        return model.model.encoder.encoder.layer, "attention.output.LayerNorm"
+    return model.model.decoder.roformer.encoder.layer, "crossattention.output.LayerNorm"
 
 
 @torch.no_grad()
@@ -43,15 +44,12 @@ def extract_hidden_state(model, src, tgt_in, layer, stack="encoder"):
                 for the state at the first decoding step.
         layer:  layer index in the stack, 0-based; negative counts from the last. A
                 sequence of indices reads all of them from the same forward pass.
-        stack:  ``"encoder"`` or ``"decoder"``. The decoder-only model (roformer) has
-                only the latter.
+        stack:  ``"encoder"`` or ``"decoder"``.
 
     Returns:
         ``[batch, seq, d_model]`` float32 on the CPU, or a list of them in the order
         given when *layer* is a sequence. ``seq`` is ``src_len`` for an
-        encoder, ``tgt_len`` for its decoder, and ``src_len + tgt_len``
-        for the decoder-only model, whose sequence is each prompt followed directly by
-        its answer (``tmodel.models.pack_prompt_and_answer``).
+        encoder and ``tgt_len`` for its decoder.
     """
     layers, norm_name = _layers_and_norm(model, stack)
     single = isinstance(layer, int)
@@ -76,7 +74,7 @@ def extract_hidden_state(model, src, tgt_in, layer, stack="encoder"):
                                f"got {len(seen)}; the layer did not run its Python forward.")
 
     hidden = [seen[0] for seen in captured]
-    if not isinstance(model, DecoderOnlyLM):
+    if hasattr(model, "transformer"):
         hidden = [h.transpose(0, 1) for h in hidden]   # nn.Transformer is [seq, batch, d_model]
     hidden = [h.float().cpu() for h in hidden]
     return hidden[0] if single else hidden

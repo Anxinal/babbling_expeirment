@@ -148,7 +148,7 @@ def main():
     tokenizer.save_pretrained(args.output_dir)
     vocab_size, pad_id = len(tokenizer), tokenizer.pad_token_id
 
-    # max_len only reaches roformer: its position table has to cover the longest evaluation.
+    # max_len only reaches roformer: its position tables have to cover the longest evaluation.
     longest = max(args.src_len, *map(length_tokens, args.eval_lens)) + QUESTION_ROOM
     model = build_model(args.model, vocab_size, pad_id, mask_spec=args.encoder_mask, pe=args.pe,
                         max_len=longest + args.tgt_len).to(device)

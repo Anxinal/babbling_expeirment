@@ -4,7 +4,8 @@ Three models, built for training by :func:`tmodel.models.build_model`:
 
 * ``transformer_mask`` -- :class:`TransformerMask`, ``nn.Transformer`` (encoder-decoder)
   (``tmodel.maskedVanilla``) whose encoder heads each get a C/F mask from ``mask_spec``. No positional encoding.
-* ``roformer`` -- ``tmodel.roformer.RoFormerForCausalLM`` (decoder-only, RoPE).
+* ``roformer`` -- ``transformers.EncoderDecoderModel`` over ``tmodel.roformer``'s
+  ``RoFormerModel`` (encoder) and ``RoFormerForCausalLM`` (decoder). RoPE.
 * ``alibi``    -- :class:`ALiBiTransformer`, ``nn.Transformer`` (encoder-decoder, 4 + 4
   layers) with the symmetric ALiBi attention bias. No positional encoding.
 

@@ -15,7 +15,7 @@ class TokenLM(nn.Module):
     """Greedy decoding shared by every wrapper.
 
     Subclasses provide ``prepare(src)``, the per-prompt work done once (the encoder
-    pass, for the encoder-decoder), and ``next_token_logits(state, tgt_in)``.
+    pass), and ``next_token_logits(state, tgt_in)``.
     """
 
     pad_token_id: int
@@ -168,112 +168,81 @@ class TransformerMaskLM(TokenLM):
         return self.decode(state, tgt_in)[:, -1]
 
 
-def pack_prompt_and_answer(src: torch.Tensor, tgt_in: torch.Tensor, pad_token_id: int):
-    """Join each prompt and its answer into one right-padded sequence.
+class RoFormerLM(TransformerMaskLM):
+    """RoFormer (rotary position embeddings) as an encoder-decoder, from ``tmodel.roformer``.
 
-    ``src`` is right-padded, so simply concatenating ``[src, tgt_in]`` would leave a
-    run of padding between a short prompt and its answer. Instead each answer starts
-    straight after its own prompt, and all padding ends up at the right.
+    An encoder-decoder like :class:`TransformerMaskLM`, whose forward pass and decoding
+    it inherits. The two stacks are joined by ``transformers.EncoderDecoderModel``: the
+    encoder is a bidirectional ``RoFormerModel``; the decoder is a
+    ``RoFormerForCausalLM`` with ``is_decoder`` (the causal mask) and
+    ``add_cross_attention``, which reads the encoder output. RoPE rotates the queries
+    and keys of every self-attention, in both stacks; cross-attention gets no position,
+    and the decoder counts its positions from 0.
 
-    Right padding is what makes this safe without a padding mask: under a causal mask
-    a real token only attends to earlier positions, and those are all real.
+    Both stacks are built from ``tmodel.roformer`` and handed to the wrapper, rather
+    than letting it build ``transformers``' own RoFormer from the configs: that one
+    masks bidirectionally even with ``is_decoder``, so its decoder sees the tokens it
+    is asked to predict.
 
-    Returns:
-        ``(seq, answer_pos)``: ``seq`` is ``[batch, src_len + tgt_len]`` and
-        ``answer_pos[b, t]`` is where ``tgt_in[b, t]`` sits in ``seq``.
-    """
-    bsz, src_len = src.shape
-    tgt_len = tgt_in.size(1)
-    prompt_len = src.ne(pad_token_id).sum(dim=1, keepdim=True)
-    answer_pos = prompt_len + torch.arange(tgt_len, device=src.device)
-    seq = src.new_full((bsz, src_len + tgt_len), pad_token_id)
-    seq[:, :src_len] = src
-    seq.scatter_(1, answer_pos, tgt_in)
-    return seq, answer_pos
-
-
-class DecoderOnlyLM(TokenLM):
-    """Base for decoder-only models: score the answer given the prompt before it.
-
-    Subclasses provide ``hidden(seq)`` and ``head(hidden)``. The head runs only on the
-    answer positions: at ``src_len=2048`` the prompt is ~95% of the sequence, and
-    projecting it onto a 50k vocabulary would cost gigabytes for logits nothing reads.
-    """
-
-    pad_token_id: int
-
-    def hidden(self, seq: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
-
-    def head(self, hidden: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
-
-    def forward(self, src: torch.Tensor, tgt_in: torch.Tensor) -> torch.Tensor:
-        seq, answer_pos = pack_prompt_and_answer(src, tgt_in, self.pad_token_id)
-        hidden = self.hidden(seq)
-        index = answer_pos.unsqueeze(-1).expand(-1, -1, hidden.size(-1))
-        return self.head(hidden.gather(1, index))
-
-    def next_token_logits(self, src: torch.Tensor, tgt_in: torch.Tensor) -> torch.Tensor:
-        # No KV cache: each step re-runs prompt + answer so far. Answers are a few dozen
-        # tokens, so this costs a few dozen forward passes per prompt.
-        return self(src, tgt_in)[:, -1]
-
-
-class RoFormerLM(DecoderOnlyLM):
-    """``RoFormerForCausalLM`` from ``tmodel.roformer`` (rotary position embeddings).
-
-    Sized to match ``transformer_mask`` rather than ``RoFormerConfig``'s defaults (768
-    wide, 12 layers, ff 3072: 85.7M parameters outside the vocabulary matrix, about
-    twice transformer_mask's 44.2M). It keeps transformer_mask's width -- 512 wide,
-    8 heads of 64, ff 2048 -- and takes 14 layers, which gives 44.4M outside the
-    vocabulary matrix, and ~70M in total for both: each ties its input and output
-    embeddings.
-    Beyond the sizes, only what the data or the decoder-only setup requires is set:
-    the vocabulary, the pad id, ``is_decoder`` (for the causal mask) and ``max_len``,
-    plus ``dropout`` when overridden.
+    Sized to ``transformer_mask`` rather than ``RoFormerConfig``'s defaults (768 wide,
+    12 layers, ff 3072): 512 wide, 8 heads of 64, ff 2048, and 6 layers in each stack.
+    One token embedding serves the encoder input, the decoder input and, tied, the
+    output. Beyond the sizes, only what the data requires is set: the vocabulary, the
+    pad id and ``max_len``, plus ``dropout`` when overridden. The layers stay RoFormer's
+    own: post-norm, GELU.
     """
 
     HIDDEN_SIZE = 512
     NUM_HEADS = 8
-    NUM_LAYERS = 14
+    NUM_LAYERS = 6  # in the encoder and in the decoder
     FF_SIZE = 2048
 
     def __init__(self, vocab_size: int, pad_token_id: int, max_len: int,
                  dropout: float | None = None):
-        super().__init__()
+        nn.Module.__init__(self)
         # Imported here, not at module level: it needs transformers>=5, and the other
         # two models should not.
-        from .roformer import RoFormerConfig, RoFormerForCausalLM
+        from transformers import EncoderDecoderModel
+
+        from .roformer import RoFormerConfig, RoFormerForCausalLM, RoFormerModel
 
         self.pad_token_id = pad_token_id
         # None keeps RoFormerConfig's 0.1 for both the hidden and the attention dropout.
         dropout_kwargs = ({} if dropout is None else
                           dict(hidden_dropout_prob=dropout, attention_probs_dropout_prob=dropout))
-        config = RoFormerConfig(vocab_size=vocab_size, pad_token_id=pad_token_id,
-                                max_position_embeddings=max_len, is_decoder=True,
-                                use_cache=False,
-                                hidden_size=self.HIDDEN_SIZE,
-                                # Explicit, so the embeddings can never differ from
-                                # hidden_size and pick up an extra projection layer.
-                                embedding_size=self.HIDDEN_SIZE,
-                                num_attention_heads=self.NUM_HEADS,
-                                num_hidden_layers=self.NUM_LAYERS,
-                                intermediate_size=self.FF_SIZE,
-                                **dropout_kwargs)
-        self.model = RoFormerForCausalLM(config)
-        self.description = (f"roformer (decoder-only, RoPE) | sized to transformer_mask: "
+        shared = dict(vocab_size=vocab_size, pad_token_id=pad_token_id,
+                      max_position_embeddings=max_len,
+                      hidden_size=self.HIDDEN_SIZE,
+                      # Explicit, so the embeddings can never differ from hidden_size
+                      # and pick up an extra projection layer.
+                      embedding_size=self.HIDDEN_SIZE,
+                      num_attention_heads=self.NUM_HEADS,
+                      num_hidden_layers=self.NUM_LAYERS,
+                      intermediate_size=self.FF_SIZE,
+                      **dropout_kwargs)
+        config = RoFormerConfig(is_decoder=True, add_cross_attention=True, use_cache=False,
+                                **shared)
+        self.model = EncoderDecoderModel(encoder=RoFormerModel(RoFormerConfig(**shared)),
+                                         decoder=RoFormerForCausalLM(config))
+        # One token embedding for both stacks, as in the other models; the decoder
+        # already ties its output matrix to it. The wrapper leaves the two separate.
+        self.model.encoder.set_input_embeddings(self.model.decoder.get_input_embeddings())
+        self.description = (f"roformer (encoder-decoder, RoPE) | sized to transformer_mask: "
                             f"{config.hidden_size} wide, {config.num_attention_heads} heads, "
-                            f"{config.num_hidden_layers} layers, ff {config.intermediate_size}, "
+                            f"{config.num_hidden_layers} encoder + {config.num_hidden_layers} "
+                            f"decoder layers, ff {config.intermediate_size}, "
                             f"dropout {config.hidden_dropout_prob} | max_len={max_len}")
 
-    def hidden(self, seq: torch.Tensor) -> torch.Tensor:
-        # No attention_mask: the causal mask alone keeps real tokens off the padding,
-        # which is all on the right (see pack_prompt_and_answer).
-        return self.model.roformer(input_ids=seq, use_cache=False).last_hidden_state
+    def encode(self, src: torch.Tensor):
+        src_mask = src.ne(self.pad_token_id)   # True = real token, the reverse of nn.Transformer
+        return self.model.encoder(input_ids=src, attention_mask=src_mask), src_mask
 
-    def head(self, hidden: torch.Tensor) -> torch.Tensor:
-        return self.model.cls(hidden)
+    def decode(self, state, tgt_in: torch.Tensor) -> torch.Tensor:
+        encoder_outputs, src_mask = state
+        return self.model(encoder_outputs=encoder_outputs, attention_mask=src_mask,
+                          decoder_input_ids=tgt_in,
+                          decoder_attention_mask=tgt_in.ne(self.pad_token_id),
+                          use_cache=False).logits
 
 
 class ALiBiLM(TransformerMaskLM):
@@ -317,9 +286,9 @@ def build_model(model_type: str, vocab_size: int, pad_token_id: int, *,
 
     * ``mask_spec`` -- ``transformer_mask`` only, the per-head encoder mask.
     * ``pe``        -- ``transformer_mask`` only, ``"none"`` or ``"sinusoidal"``.
-    * ``max_len``   -- ``roformer`` only, the longest prompt + answer. Its default is
-      shorter than a RULER sample (2048-token prompts), so it has to be set;
-      ``train.py`` passes ``src_len + tgt_len``.
+    * ``max_len``   -- ``roformer`` only, the longest prompt (the answer is shorter, and
+      the decoder counts its positions from 0). ``train.py`` passes the longest
+      evaluated prompt plus ``tgt_len``.
     * ``dropout``   -- every model: overrides its library's dropout rate (all of them,
       attention included). ``None`` keeps the library default.
     """
