@@ -49,9 +49,9 @@ from tmodel.models import MODEL_TYPES, PE_TYPES, build_model
 # the same question over the same kind of story: "Is P in the L?" is asked by qa9 and
 # qa10 too, which add negation / "either ... or".
 STAGES = [
-    [1, 4, 5, 9, 10],                     # one supporting fact
-    [2, 7, 8],                            # two supporting facts, or a tally over several
-    [3],                                  # three supporting facts
+    [1, 2, 3],                     
+    [4, 5],                           
+    [6, 7, 8, 9, 10],                                  
 ]
 
 # Room for the question on top of the context when nothing may be truncated.
@@ -124,7 +124,7 @@ def main():
     p.add_argument("--batch_size", type=int, default=16)
     p.add_argument("--eval_batch_size", type=int, default=2,
                    help="small: at 8k the per-head attention masks take ~2 GB per sample")
-    p.add_argument("--lr", type=float, default=1.5e-4)
+    p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--warmup_steps", type=int, default=4000)
     p.add_argument("--grad_clip", type=float, default=1.0)
     p.add_argument("--workers", type=int, default=4)
@@ -185,7 +185,8 @@ def main():
         val_loader = make_loader(val, tokenizer, args.batch_size, args.workers, args.src_len)
         print(f"=== stage {stage}: tasks {tasks} | {len(train_loader.dataset)} train samples, "
               f"{len(val_loader.dataset)} val, {args.epochs[stage - 1]} epochs ===", flush=True)
-
+        # reset the scheduler steps
+        scheduler = get_inverse_sqrt_schedule(optimizer, num_warmup_steps=args.warmup_steps)
         for epoch in range(1, args.epochs[stage - 1] + 1):
             running = []
             for i, batch in enumerate(train_loader, 1):
