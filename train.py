@@ -39,6 +39,7 @@ import os
 import torch
 import torch.nn as nn
 import wandb
+from transformers import get_inverse_sqrt_schedule
 
 from load_dataset import (LENGTHS, TRAIN_LENGTHS, length_tokens, load_babilong, load_tasks,
                           load_tokenizer, load_training_babilong, make_loader)
@@ -118,12 +119,12 @@ def main():
     p.add_argument("--val_samples_per_task", type=int, default=100,
                    help="per-epoch validation: held out from the end of each training file")
     p.add_argument("--eval_samples_per_task", type=int, default=100, help="per length, after a stage")
-    p.add_argument("--epochs", type=int, nargs=3, default=[5, 5, 10], help="epochs per stage")
+    p.add_argument("--epochs", type=int, nargs=3, default=[4, 4, 6], help="epochs per stage")
     p.add_argument("--start_stage", type=int, default=1, choices=[1, 2, 3])
     p.add_argument("--batch_size", type=int, default=16)
     p.add_argument("--eval_batch_size", type=int, default=2,
                    help="small: at 8k the per-head attention masks take ~2 GB per sample")
-    p.add_argument("--lr", type=float, default=2e-4)
+    p.add_argument("--lr", type=float, default=1.5e-4)
     p.add_argument("--warmup_steps", type=int, default=4000)
     p.add_argument("--grad_clip", type=float, default=1.0)
     p.add_argument("--workers", type=int, default=4)
@@ -153,6 +154,8 @@ def main():
                         max_len=longest + args.tgt_len).to(device)
     print(model.description)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01, betas=(0.9, 0.98))
+    # One schedule over the whole run: it is stepped per optimizer step and not reset by a stage.
+    scheduler = get_inverse_sqrt_schedule(optimizer, num_warmup_steps=args.warmup_steps)
     criterion = nn.CrossEntropyLoss(ignore_index=pad_id)
     step = 0
     if args.start_stage > 1:
@@ -160,6 +163,7 @@ def main():
                           map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
+        scheduler.load_state_dict(ckpt["scheduler"])
         step = ckpt["step"]
 
     metrics_path = os.path.join(args.output_dir, "metrics.jsonl")
@@ -185,15 +189,13 @@ def main():
         for epoch in range(1, args.epochs[stage - 1] + 1):
             running = []
             for i, batch in enumerate(train_loader, 1):
-                # Linear warmup once, at the start of the run; constant afterwards.
-                lr = args.lr * min(1.0, (step + 1) / args.warmup_steps)
-                for group in optimizer.param_groups:
-                    group["lr"] = lr
+                lr = scheduler.get_last_lr()[0]
                 loss = forward(model, criterion, batch, device)[0]
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
                 optimizer.step()
+                scheduler.step()
                 step += 1
                 running.append(loss.item())
                 if not math.isfinite(running[-1]):
@@ -221,7 +223,8 @@ def main():
         # Saved before the length evaluation, so a failure at 8k cannot lose the stage.
         # The same layout as the RULER checkpoints, plus what a later stage needs to continue.
         out = os.path.join(args.output_dir, f"stage{stage}.pt")
-        torch.save(dict(model=model.state_dict(), optimizer=optimizer.state_dict(), step=step,
+        torch.save(dict(model=model.state_dict(), optimizer=optimizer.state_dict(),
+                        scheduler=scheduler.state_dict(), step=step,
                         stage=stage, tasks=tasks, args=vars(args), vocab_size=vocab_size,
                         pad_token_id=pad_id, bos_token_id=tokenizer.bos_token_id,
                         eos_token_id=tokenizer.eos_token_id), out + ".tmp")
