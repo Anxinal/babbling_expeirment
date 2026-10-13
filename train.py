@@ -110,7 +110,7 @@ def main():
     p.add_argument("--pe", default="none", choices=PE_TYPES, help="transformer_mask only")
     p.add_argument("--train_len", nargs="+", default=["0k", "1k", "2k"], choices=TRAIN_LENGTHS,
                    help="training mixes the Hub's samples of these lengths")
-    p.add_argument("--eval_lens", nargs="+", default=["0k", "1k", "2k", "4k", "8k"], choices=LENGTHS,
+    p.add_argument("--eval_lens", nargs="+", default=["0k", "1k", "2k", "4k", "8k", "16k"], choices=LENGTHS,
                    help="lengths evaluated after every stage; those not in --train_len are extrapolation")
     p.add_argument("--src_len", type=int, default=2048, help="longest training source")
     p.add_argument("--tgt_len", type=int, default=16)
