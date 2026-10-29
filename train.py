@@ -120,7 +120,7 @@ def main():
     p.add_argument("--val_samples_per_task", type=int, default=100,
                    help="per-epoch validation: held out from the end of each training file")
     p.add_argument("--eval_samples_per_task", type=int, default=100, help="per length, after a stage")
-    p.add_argument("--epochs", type=int, nargs=3, default=[4, 4, 6], help="epochs per stage")
+    p.add_argument("--epochs", type=int, nargs=3, default=[4, 5, 15], help="epochs per stage")
     p.add_argument("--start_stage", type=int, default=1, choices=[1, 2, 3])
     p.add_argument("--batch_size", type=int, default=16)
     p.add_argument("--eval_batch_size", type=int, default=2,
