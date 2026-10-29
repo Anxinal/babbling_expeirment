@@ -1,8 +1,6 @@
 #!/bin/bash
-# Train six models on BABILong with the three-stage curriculum of train.py:
-#   RoPE (roformer), ALiBi,
-#   the vanilla transformer with no encoder mask, without and with sinusoidal encoding,
-#   and with the CCCCFFFF and CCCCCCCC encoder masks (no positional encoding).
+# Train ALiBi with half-causal / half-future encoder heads (alibi_masked) on BABILong
+# with the three-stage curriculum of train.py. The other arms are commented out in RUNS.
 #
 #   bash run_stages.sh              # one Slurm job per model
 #   bash run_stages.sh --local      # run here, one after another
@@ -60,12 +58,13 @@ MODE="${1:-slurm}"
 
 # name | model flags
 RUNS=(
-    "roformer_s${SEED}|--model roformer"
-    "alibi_s${SEED}|--model alibi"
-    "transformer_mask_penone_encB_s${SEED}|--model transformer_mask --encoder_mask B"
-    "transformer_mask_pesinusoidal_encB_s${SEED}|--model transformer_mask --encoder_mask B --pe sinusoidal"
-    "transformer_mask_penone_encCCCCFFFF_s${SEED}|--model transformer_mask --encoder_mask CCCCFFFF"
-    "transformer_mask_penone_encCCCCCCCC_s${SEED}|--model transformer_mask --encoder_mask CCCCCCCC"
+    "alibi_masked_s${SEED}|--model alibi_masked"
+    # "roformer_s${SEED}|--model roformer"
+    # "alibi_s${SEED}|--model alibi"
+    # "transformer_mask_penone_encB_s${SEED}|--model transformer_mask --encoder_mask B"
+    # "transformer_mask_pesinusoidal_encB_s${SEED}|--model transformer_mask --encoder_mask B --pe sinusoidal"
+    # "transformer_mask_penone_encCCCCFFFF_s${SEED}|--model transformer_mask --encoder_mask CCCCFFFF"
+    # "transformer_mask_penone_encCCCCCCCC_s${SEED}|--model transformer_mask --encoder_mask CCCCCCCC"
 )
 
 # Create the virtualenv if it is missing, install the requirements if they changed, and

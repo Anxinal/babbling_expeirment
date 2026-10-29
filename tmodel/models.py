@@ -2,12 +2,12 @@
 import torch
 import torch.nn as nn
 
-from .alibi import ALiBiConfig, ALiBiTransformer
+from . import alibi, alibi_masked
 from .maskedVanilla import TransformerMask
 
-MODEL_TYPES = ("transformer_mask", "roformer", "alibi")
+MODEL_TYPES = ("transformer_mask", "roformer", "alibi", "alibi_masked")
 # Positional encodings for transformer_mask. nn.Transformer ships none, so "sinusoidal"
-# comes from torch_geometric; roformer and alibi carry their own.
+# comes from torch_geometric; roformer and the alibi models carry their own.
 PE_TYPES = ("none", "sinusoidal")
 
 
@@ -255,23 +255,43 @@ class ALiBiLM(TransformerMaskLM):
     The input and output embeddings are tied (:func:`tied_embedding`).
     """
 
+    NAME = "alibi"
+    PACKAGE = alibi
+    BIAS = "symmetric ALiBi"
+
     def __init__(self, vocab_size: int, pad_token_id: int, dropout: float | None = None):
         nn.Module.__init__(self)
         self.pad_token_id = pad_token_id
         # None keeps ALiBiConfig's dropout.
-        config = ALiBiConfig(**({} if dropout is None else dict(dropout=dropout)))
-        self.transformer = ALiBiTransformer(config)
+        config = self.PACKAGE.ALiBiConfig(**({} if dropout is None else dict(dropout=dropout)))
+        self.transformer = self.PACKAGE.ALiBiTransformer(config)
         # The config only reaches the nn.Dropout modules; attention dropout is a float
         # on each nn.MultiheadAttention (see set_dropout).
         set_dropout(self.transformer, config.dropout)
         self.embed, self.lm_head = tied_embedding(vocab_size, config.d_model, pad_token_id)
         self.embed_scale = config.d_model ** 0.5
         self.pos_encoding = None
-        self.description = (f"alibi (encoder-decoder, nn.Transformer, pre-norm, tied "
-                            f"embeddings, symmetric ALiBi) | {config.d_model} wide, "
+        self.description = (f"{self.NAME} (encoder-decoder, nn.Transformer, pre-norm, tied "
+                            f"embeddings, {self.BIAS}) | {config.d_model} wide, "
                             f"{config.num_heads} heads, {config.num_layers} encoder + "
                             f"{config.num_layers} decoder layers, "
                             f"dropout {config.dropout}")
+
+
+class ALiBiMaskedLM(ALiBiLM):
+    """:class:`ALiBiLM` built on ``tmodel.alibi_masked``.
+
+    The encoder's symmetric ALiBi bias has its slopes scaled by 0.25 and its distance
+    clamped at ``MAX_RANGE``, and half the encoder heads are causal and half
+    future-only (``causal_future_block``), the two halves sharing one set of slopes.
+    The decoder is the same as :class:`ALiBiLM`'s. Sizes from
+    ``tmodel/alibi_masked/config.py``.
+    """
+
+    NAME = "alibi_masked"
+    PACKAGE = alibi_masked
+    BIAS = (f"symmetric ALiBi x0.25 clamped at {alibi_masked.attention.MAX_RANGE}, "
+            f"encoder heads half causal / half future")
 
 
 def build_model(model_type: str, vocab_size: int, pad_token_id: int, *,
@@ -279,8 +299,8 @@ def build_model(model_type: str, vocab_size: int, pad_token_id: int, *,
                 dropout: float | None = None) -> TokenLM:
     """Build one of :data:`MODEL_TYPES` with the shared ``model(src, tgt_in)`` interface.
 
-    ``transformer_mask`` and ``alibi`` use their library's default sizes
-    (``nn.Transformer``'s and ``ALiBiConfig``'s), with tied embeddings and pre-norm;
+    ``transformer_mask``, ``alibi`` and ``alibi_masked`` use their library's default
+    sizes (``nn.Transformer``'s and ``ALiBiConfig``'s), with tied embeddings and pre-norm;
     ``roformer`` is sized to match ``transformer_mask`` (see :class:`RoFormerLM`). The
     only arguments are what the data dictates:
 
@@ -301,4 +321,6 @@ def build_model(model_type: str, vocab_size: int, pad_token_id: int, *,
         return RoFormerLM(vocab_size, pad_token_id, max_len, dropout)
     if model_type == "alibi":
         return ALiBiLM(vocab_size, pad_token_id, dropout)
+    if model_type == "alibi_masked":
+        return ALiBiMaskedLM(vocab_size, pad_token_id, dropout)
     raise ValueError(f"unknown model {model_type!r}; expected one of {MODEL_TYPES}")

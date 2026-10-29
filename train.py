@@ -2,6 +2,7 @@
 
     python train.py --model transformer_mask --encoder_mask CCCCFFFF --output_dir runs/vanilla
     python train.py --model alibi --output_dir runs/alibi
+    python train.py --model alibi_masked --output_dir runs/alibi_masked
 
 The stages are ordered by how many facts an answer needs, and each adds tasks to the
 ones before it, so the last stage trains on all 9:
